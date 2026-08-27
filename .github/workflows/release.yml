@@ -16,8 +16,6 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-          - target: x86_64-apple-darwin
-            os: macos-13
           - target: aarch64-apple-darwin
             os: macos-14
     runs-on: ${{ matrix.os }}
@@ -88,7 +86,6 @@ jobs:
         id: sha
         run: |
           echo "linux=$(sha256sum dist/${BIN_NAME}-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "macos_x86=$(sha256sum dist/${BIN_NAME}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "macos_arm=$(sha256sum dist/${BIN_NAME}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tap repository
@@ -102,7 +99,6 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
           SHA_LINUX: ${{ steps.sha.outputs.linux }}
-          SHA_MACOS_X86: ${{ steps.sha.outputs.macos_x86 }}
           SHA_MACOS_ARM: ${{ steps.sha.outputs.macos_arm }}
         run: |
           mkdir -p tap/Formula
@@ -119,8 +115,7 @@ jobs:
                 sha256 "${SHA_MACOS_ARM}"
               end
               on_intel do
-                url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v${VERSION}/pdf_to_epub-x86_64-apple-darwin.tar.gz"
-                sha256 "${SHA_MACOS_X86}"
+                odie "pdf_to_epub ainda não publica binário para macOS Intel; construa a partir do código-fonte."
               end
             end
 

@@ -32,7 +32,8 @@ O binário fica em `target/release/pdf_to_epub`.
 
 ### Binários prontos
 
-Binários pré-compilados (Linux e macOS, Intel e Apple Silicon) ficam disponíveis em
+Binários pré-compilados (Linux e macOS Apple Silicon; macOS Intel ainda não publicado)
+ficam disponíveis em
 [Releases](https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases) a
 cada versão publicada.
 
