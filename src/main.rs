@@ -11,6 +11,16 @@ use std::path::{Path, PathBuf};
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    if args.get(1).map(String::as_str) == Some("--version") {
+        println!("pdf_to_epub {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    if args.get(1).map(String::as_str) == Some("--help") {
+        print_help();
+        return;
+    }
+
     if args.get(1).map(String::as_str) == Some("--headless") {
         let pdf_path = match args.get(2) {
             Some(p) => PathBuf::from(p),
@@ -36,6 +46,16 @@ fn main() {
         eprintln!("erro: {e}");
         std::process::exit(1);
     }
+}
+
+fn print_help() {
+    println!("pdf_to_epub {} — conversor de PDF para EPUB com TUI", env!("CARGO_PKG_VERSION"));
+    println!();
+    println!("USO:");
+    println!("  pdf_to_epub [caminho.pdf]                 abre a interface interativa");
+    println!("  pdf_to_epub --headless <caminho.pdf> [dir] roda sem interface (scripts/depuração)");
+    println!("  pdf_to_epub --version                     mostra a versão");
+    println!("  pdf_to_epub --help                        mostra esta ajuda");
 }
 
 /// Runs the full conversion pipeline without the TUI, logging each step to stdout.

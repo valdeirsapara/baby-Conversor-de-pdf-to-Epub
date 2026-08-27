@@ -11,6 +11,14 @@ original, e os capítulos são detectados automaticamente a partir do próprio t
 
 ## Instalação
 
+### Via Homebrew (macOS e Linux)
+
+```bash
+brew install valdeirsapara/pdf-to-epub/pdf_to_epub
+```
+
+### A partir do código-fonte
+
 Requer [Rust](https://www.rust-lang.org/tools/install) (edition 2024) e acesso à internet
 na primeira compilação, para baixar as dependências.
 
@@ -21,6 +29,12 @@ cargo build --release
 ```
 
 O binário fica em `target/release/pdf_to_epub`.
+
+### Binários prontos
+
+Binários pré-compilados (Linux e macOS, Intel e Apple Silicon) ficam disponíveis em
+[Releases](https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases) a
+cada versão publicada.
 
 ## Principais recursos
 

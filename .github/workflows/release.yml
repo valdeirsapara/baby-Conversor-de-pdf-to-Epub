@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+env:
+  BIN_NAME: pdf_to_epub
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-13
+          - target: aarch64-apple-darwin
+            os: macos-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          staging="${BIN_NAME}-${{ matrix.target }}"
+          mkdir -p "$staging"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$staging/"
+          cp README.md "$staging/"
+          tar czf "${staging}.tar.gz" "$staging"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-${{ matrix.target }}
+          path: ${{ env.BIN_NAME }}-${{ matrix.target }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Determine version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+          generate_release_notes: true
+
+  update-homebrew-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Compute checksums
+        id: sha
+        run: |
+          echo "linux=$(sha256sum dist/${BIN_NAME}-x86_64-unknown-linux-musl.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "macos_x86=$(sha256sum dist/${BIN_NAME}-x86_64-apple-darwin.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "macos_arm=$(sha256sum dist/${BIN_NAME}-aarch64-apple-darwin.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap repository
+        uses: actions/checkout@v4
+        with:
+          repository: valdeirsapara/homebrew-pdf-to-epub
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update formula
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          SHA_LINUX: ${{ steps.sha.outputs.linux }}
+          SHA_MACOS_X86: ${{ steps.sha.outputs.macos_x86 }}
+          SHA_MACOS_ARM: ${{ steps.sha.outputs.macos_arm }}
+        run: |
+          mkdir -p tap/Formula
+          cat > tap/Formula/pdf_to_epub.rb << EOF
+          class PdfToEpub < Formula
+            desc "Conversor de PDF para EPUB com TUI, preservando a posição das imagens"
+            homepage "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub"
+            version "${VERSION}"
+            license "MIT"
+
+            on_macos do
+              on_arm do
+                url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v${VERSION}/pdf_to_epub-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_ARM}"
+              end
+              on_intel do
+                url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v${VERSION}/pdf_to_epub-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_MACOS_X86}"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v${VERSION}/pdf_to_epub-x86_64-unknown-linux-musl.tar.gz"
+              sha256 "${SHA_LINUX}"
+            end
+
+            def install
+              staging_dir = Dir["pdf_to_epub-*"].first
+              bin.install "#{staging_dir}/pdf_to_epub"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/pdf_to_epub --version")
+            end
+          end
+          EOF
+
+      - name: Commit and push
+        working-directory: tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/pdf_to_epub.rb
+          git diff --cached --quiet && exit 0
+          git commit -m "pdf_to_epub ${{ needs.release.outputs.version }}"
+          git push
