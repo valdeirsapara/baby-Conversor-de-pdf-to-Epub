@@ -72,9 +72,18 @@ jobs:
           files: dist/*.tar.gz
           generate_release_notes: true
 
-  update-homebrew-tap:
+  update-homebrew-taps:
     needs: release
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # A fórmula é publicada em dois taps: o pessoal (agrupa várias
+        # ferramentas) e o dedicado a este projeto. Ambos ficam com o
+        # mesmo arquivo, gerado abaixo.
+        tap:
+          - valdeirsapara/homebrew-tap
+          - valdeirsapara/homebrew-pdf-to-epub
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -91,7 +100,7 @@ jobs:
       - name: Checkout tap repository
         uses: actions/checkout@v4
         with:
-          repository: valdeirsapara/homebrew-pdf-to-epub
+          repository: ${{ matrix.tap }}
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: tap
 
@@ -104,14 +113,14 @@ jobs:
           mkdir -p tap/Formula
           cat > tap/Formula/pdf_to_epub.rb << EOF
           class PdfToEpub < Formula
-            desc "Conversor de PDF para EPUB com TUI, preservando a posição das imagens"
+            desc "Convert PDF to EPUB with a TUI, keeping images in their original position"
             homepage "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub"
             version "${VERSION}"
             license "MIT"
 
             on_macos do
               on_arm do
-                url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v${VERSION}/pdf_to_epub-aarch64-apple-darwin.tar.gz"
+                url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v#{version}/pdf_to_epub-aarch64-apple-darwin.tar.gz"
                 sha256 "${SHA_MACOS_ARM}"
               end
               on_intel do
@@ -120,8 +129,10 @@ jobs:
             end
 
             on_linux do
-              url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v${VERSION}/pdf_to_epub-x86_64-unknown-linux-musl.tar.gz"
-              sha256 "${SHA_LINUX}"
+              on_intel do
+                url "https://github.com/valdeirsapara/baby-Conversor-de-pdf-to-Epub/releases/download/v#{version}/pdf_to_epub-x86_64-unknown-linux-musl.tar.gz"
+                sha256 "${SHA_LINUX}"
+              end
             end
 
             def install

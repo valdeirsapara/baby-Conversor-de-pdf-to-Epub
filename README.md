@@ -14,6 +14,14 @@ original, e os capítulos são detectados automaticamente a partir do próprio t
 ### Via Homebrew (macOS e Linux)
 
 ```bash
+brew tap valdeirsapara/tap
+brew install pdf_to_epub
+```
+
+A fórmula também é publicada em um tap dedicado só a este projeto, para quem prefere não
+adicionar o tap geral:
+
+```bash
 brew install valdeirsapara/pdf-to-epub/pdf_to_epub
 ```
 
