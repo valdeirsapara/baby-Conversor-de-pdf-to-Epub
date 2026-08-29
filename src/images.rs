@@ -39,6 +39,8 @@ fn build_asset(doc: &Document, img: &lopdf::xobject::PdfImage) -> Result<ImageAs
                 filename: format!("{filename_base}.jpg"),
                 bytes: img.content.to_vec(),
                 mime: "image/jpeg",
+                width: img.width.max(0) as u32,
+                height: img.height.max(0) as u32,
             });
         }
         return Err(format!("DCTDecode combinado com outros filtros ({filters:?})"));
@@ -71,6 +73,8 @@ fn build_asset(doc: &Document, img: &lopdf::xobject::PdfImage) -> Result<ImageAs
         filename: format!("{filename_base}.png"),
         bytes: buf,
         mime: "image/png",
+        width,
+        height,
     })
 }
 
@@ -235,4 +239,45 @@ fn unpack_bits(raw: &[u8], width: u32, height: u32, bpc: u32) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cmyk_converts_to_the_expected_rgb_corners() {
+        // ciano puro, magenta puro, amarelo puro, preto puro, branco
+        let raw = [255, 0, 0, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 0, 0];
+        assert_eq!(
+            cmyk_to_rgb(&raw),
+            vec![0, 255, 255, 255, 0, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255]
+        );
+    }
+
+    #[test]
+    fn a_trailing_partial_cmyk_pixel_is_dropped_instead_of_panicking() {
+        assert_eq!(cmyk_to_rgb(&[0, 0, 0, 255, 1, 2]), vec![0, 0, 0]);
+    }
+
+    /// PDF raster rows are byte-aligned, so a 4-pixel 1-bit row occupies a whole byte and
+    /// the next row restarts on a byte boundary — unpacking as one long bitstream would
+    /// shear the image diagonally.
+    #[test]
+    fn one_bit_rows_restart_on_a_byte_boundary() {
+        let raw = [0b1010_0000, 0b0101_0000];
+        assert_eq!(unpack_bits(&raw, 4, 2, 1), vec![1, 0, 1, 0, 0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn a_row_wider_than_one_byte_is_unpacked_across_bytes() {
+        let raw = [0b1111_0000, 0b1000_0000];
+        assert_eq!(unpack_bits(&raw, 9, 1, 1), vec![1, 1, 1, 1, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn missing_rows_are_padded_with_zeros_rather_than_truncated() {
+        let raw = [0b1111_0000];
+        assert_eq!(unpack_bits(&raw, 4, 3, 1), vec![1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0]);
+    }
 }

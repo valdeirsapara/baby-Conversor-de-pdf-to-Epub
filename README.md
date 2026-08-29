@@ -55,6 +55,10 @@ cada versão publicada.
   tamanho de fonte/tela — não é uma cópia "engessada" das páginas do PDF.
 - **Imagens no lugar certo**: cada imagem é extraída e inserida no HTML exatamente na
   posição de leitura em que aparecia no PDF, entre os mesmos parágrafos.
+- **Capa sempre presente**: o EPUB sai com miniatura na biblioteca do Kindle/Kobo/Apple
+  Books e com a capa como primeira página do livro. A imagem é detectada na primeira
+  página do PDF, pode ser informada com `--cover` ou, em último caso, é gerada com o
+  título e o autor.
 - **Capítulos automáticos**: detecta títulos de capítulo (ex.: "Capítulo 1", "Chapter 2")
   por padrão de texto e por salto de tamanho de fonte, gerando um sumário navegável real.
 - **TUI com progresso ao vivo**: uma tela de terminal guia a conversão passo a passo,
@@ -83,7 +87,17 @@ reinterpretar os bytes da imagem como se fossem instruções de desenho do PDF e
 
 As imagens em si são reaproveitadas como estão quando já são JPEG (a maioria dos casos),
 e reconvertidas para PNG quando são dados de imagem "crus" (Flate/RGB/CMYK/paleta
-indexada). Capítulos são detectados combinando padrões de texto comuns
+indexada).
+
+A capa segue três tentativas, em ordem: (1) o arquivo passado em `--cover`; (2) a maior
+imagem desenhada na primeira página do PDF — a capa de verdade na maioria dos livros
+digitalizados e ilustrados —, que é então removida do corpo do capítulo para não aparecer
+duas vezes seguidas; (3) uma capa tipográfica desenhada na hora, com o título e o autor
+sobre fundo sólido, em 1600x2560 (a proporção que o Kindle recomenda). No EPUB isso vira
+tanto o `<meta name="cover">` do OPF (a miniatura da biblioteca) quanto uma `cover.xhtml`
+em tela cheia no início do spine (a página de capa).
+
+Capítulos são detectados combinando padrões de texto comuns
 ("Capítulo N", "Chapter N", "Parte N"...) com um salto perceptível no tamanho da fonte em
 relação ao corpo do texto — títulos quebrados em várias linhas são unidos automaticamente.
 
@@ -126,6 +140,21 @@ O EPUB e o `preview.html` são salvos na mesma pasta do PDF de entrada.
 
 Roda o pipeline completo imprimindo o log no terminal, sem abrir a TUI.
 
+### Escolhendo a capa
+
+```bash
+./target/release/pdf_to_epub --cover "capa.jpg" "caminho/para/o/livro.pdf"
+```
+
+`--cover` aceita qualquer imagem que o conversor consiga ler (JPEG e PNG entram no EPUB sem
+recompressão; outros formatos são convertidos para JPEG) e funciona nos dois modos, em
+qualquer posição da linha de comando. Na TUI há um campo equivalente na tela de
+confirmação — deixe vazio para detectar automaticamente. Se o arquivo não puder ser lido, o
+conversor avisa no log e cai para a detecção automática em vez de abortar.
+
+Para a miniatura sair nítida no Kindle, use uma imagem de pelo menos 625x1000; o log avisa
+quando a capa detectada é menor que isso.
+
 ## Limitações conhecidas
 
 - A separação em capítulos é heurística; PDFs sem título de capítulo destacado (fonte
@@ -135,6 +164,20 @@ Roda o pipeline completo imprimindo o log no terminal, sem abrir a TUI.
 - Imagens com os codecs `JPXDecode` (JPEG2000), `CCITTFaxDecode` ou `JBIG2Decode` não são
   suportadas e são puladas (com aviso no log) em vez de travar a conversão.
 
+## Testes
+
+```bash
+cargo test
+```
+
+O projeto é um binário, então os testes moram em `mod tests` dentro de cada módulo, com as
+fixtures compartilhadas em `src/test_support.rs` (compilado só em teste). São testes de
+unidade sobre as funções puras — detecção de capítulos, escolha e desenho da capa, montagem
+do HTML, decodificação de imagem e de metadados, parsing das flags — sem depender de nenhum
+PDF de exemplo. O workflow `ci.yml` roda `cargo test` a cada push e pull request.
+
+Para verificar o pipeline completo contra um PDF de verdade, use o modo `--headless`.
+
 ## Estrutura do projeto
 
 | Módulo | Responsabilidade |
@@ -142,8 +185,10 @@ Roda o pipeline completo imprimindo o log no terminal, sem abrir a TUI.
 | `pdf_parse.rs` | Higieniza e lê o conteúdo do PDF; reconstrói texto e posição das imagens |
 | `images.rs` | Extrai e reconverte as imagens embutidas no PDF |
 | `chapters.rs` | Detecta capítulos a partir do fluxo de texto |
+| `cover.rs` | Escolhe (ou desenha) a capa e monta a página `cover.xhtml` |
 | `epub_gen.rs` | Monta o HTML de cada capítulo e gera o arquivo `.epub` |
 | `preview.rs` | Gera o `preview.html` autocontido e o abre no navegador |
 | `tui.rs` | Interface de terminal (telas, progresso, ações) |
 | `pdf_model.rs` | Tipos de dados compartilhados entre os módulos |
+| `test_support.rs` | Fixtures compartilhadas pelos testes (só em `cfg(test)`) |
 | `main.rs` | Ponto de entrada (modo TUI e modo `--headless`) |
