@@ -2,8 +2,13 @@ name: CI
 
 on:
   push:
-    branches: ["main"]
   pull_request:
+
+# Um push logo depois do outro no mesmo branch torna a execução anterior inútil;
+# cancelá-la evita fila e gasto de minutos à toa.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
