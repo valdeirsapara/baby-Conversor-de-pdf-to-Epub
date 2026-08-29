@@ -8,7 +8,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
 
-use crate::{chapters, epub_gen, pdf_parse, preview};
+use crate::{chapters, cover, epub_gen, layout, pdf_parse, preview};
 
 enum ProgressMsg {
     Stage(String),
@@ -27,12 +27,16 @@ type Done = Option<Result<(PathBuf, PathBuf, usize, usize), String>>;
 enum Screen {
     Input {
         path: String,
+        /// Carried over from `--cover` so it prefills the Confirm screen.
+        cover: String,
     },
     Confirm {
         path: PathBuf,
         title: String,
         author: String,
         lang: String,
+        /// Empty means "detect the cover automatically".
+        cover: String,
         field: usize,
     },
     Progress {
@@ -43,10 +47,11 @@ enum Screen {
     },
 }
 
-pub fn run(initial_path: Option<String>) -> std::io::Result<()> {
+pub fn run(initial_path: Option<String>, initial_cover: Option<String>) -> std::io::Result<()> {
     let mut terminal = ratatui::init();
     let mut screen = Screen::Input {
         path: initial_path.unwrap_or_default(),
+        cover: initial_cover.unwrap_or_default(),
     };
     let result = event_loop(&mut terminal, &mut screen);
     ratatui::restore();
@@ -92,7 +97,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, screen: &mut Screen) -> s
 
 fn handle_key(code: KeyCode, screen: &mut Screen) -> bool {
     match screen {
-        Screen::Input { path } => match code {
+        Screen::Input { path, cover } => match code {
             KeyCode::Enter => {
                 let trimmed = path.trim().to_string();
                 if !trimmed.is_empty() && Path::new(&trimmed).exists() {
@@ -103,6 +108,7 @@ fn handle_key(code: KeyCode, screen: &mut Screen) -> bool {
                         title,
                         author,
                         lang: "pt".to_string(),
+                        cover: cover.clone(),
                         field: 0,
                     };
                 }
@@ -119,10 +125,11 @@ fn handle_key(code: KeyCode, screen: &mut Screen) -> bool {
             title,
             author,
             lang,
+            cover,
             field,
         } => match code {
-            KeyCode::Tab => *field = (*field + 1) % 3,
-            KeyCode::BackTab => *field = (*field + 2) % 3,
+            KeyCode::Tab => *field = (*field + 1) % 4,
+            KeyCode::BackTab => *field = (*field + 3) % 4,
             KeyCode::Enter => {
                 let (tx, rx) = mpsc::channel();
                 let pdf_path = path.clone();
@@ -133,7 +140,10 @@ fn handle_key(code: KeyCode, screen: &mut Screen) -> bool {
                 let doc_title = title.clone();
                 let doc_author = author.clone();
                 let doc_lang = lang.clone();
-                thread::spawn(move || run_pipeline(pdf_path, out_dir, doc_title, doc_author, doc_lang, tx));
+                let doc_cover = cover.trim().to_string();
+                thread::spawn(move || {
+                    run_pipeline(pdf_path, out_dir, doc_title, doc_author, doc_lang, doc_cover, tx)
+                });
                 *screen = Screen::Progress {
                     rx,
                     stage: "Iniciando".to_string(),
@@ -144,7 +154,8 @@ fn handle_key(code: KeyCode, screen: &mut Screen) -> bool {
             KeyCode::Char(c) => match field {
                 0 => title.push(c),
                 1 => author.push(c),
-                _ => lang.push(c),
+                2 => lang.push(c),
+                _ => cover.push(c),
             },
             KeyCode::Backspace => {
                 match field {
@@ -154,8 +165,11 @@ fn handle_key(code: KeyCode, screen: &mut Screen) -> bool {
                     1 => {
                         author.pop();
                     }
-                    _ => {
+                    2 => {
                         lang.pop();
+                    }
+                    _ => {
+                        cover.pop();
                     }
                 };
             }
@@ -177,7 +191,7 @@ fn handle_key(code: KeyCode, screen: &mut Screen) -> bool {
                 }
             }
             KeyCode::Char('n') => {
-                *screen = Screen::Input { path: String::new() };
+                *screen = Screen::Input { path: String::new(), cover: String::new() };
             }
             KeyCode::Esc => return true,
             _ => {}
@@ -214,6 +228,7 @@ fn run_pipeline(
     title: String,
     author: String,
     lang: String,
+    cover_path: String,
     tx: mpsc::Sender<ProgressMsg>,
 ) {
     let _ = tx.send(ProgressMsg::Stage("Extraindo texto e imagens do PDF".to_string()));
@@ -228,6 +243,24 @@ fn run_pipeline(
         }
     };
 
+    let _ = tx.send(ProgressMsg::Stage("Escolhendo a capa".to_string()));
+    let tx_log = tx.clone();
+    let cover = cover::select_cover(
+        &extracted,
+        (!cover_path.is_empty()).then(|| Path::new(&cover_path)),
+        &title,
+        &author,
+        move |s| {
+            let _ = tx_log.send(ProgressMsg::Log(s));
+        },
+    );
+
+    let metrics = layout::measure(&extracted);
+    let _ = tx.send(ProgressMsg::Log(format!(
+        "layout: corpo {:.1}pt, entrelinha {:.1}pt",
+        metrics.baseline_font, metrics.line_gap
+    )));
+
     let _ = tx.send(ProgressMsg::Stage("Detectando capítulos".to_string()));
     let tx_log = tx.clone();
     let chapters = chapters::detect_chapters(&extracted, move |s| {
@@ -236,7 +269,16 @@ fn run_pipeline(
 
     let _ = tx.send(ProgressMsg::Stage("Gerando EPUB".to_string()));
     let epub_path = out_dir.join(epub_filename(&pdf_path));
-    let fragments = match epub_gen::build_epub(&chapters, &extracted.images, &title, &author, &lang, &epub_path) {
+    let fragments = match epub_gen::build_epub(
+        &chapters,
+        &extracted.images,
+        &cover,
+        &metrics,
+        &title,
+        &author,
+        &lang,
+        &epub_path,
+    ) {
         Ok(f) => f,
         Err(e) => {
             let _ = tx.send(ProgressMsg::Error(format!("Falha ao gerar o EPUB: {e}")));
@@ -245,7 +287,14 @@ fn run_pipeline(
     };
 
     let _ = tx.send(ProgressMsg::Stage("Gerando preview HTML".to_string()));
-    let preview_path = match preview::write_preview(&fragments, &extracted.images, &title, &author, &out_dir) {
+    let preview_path = match preview::write_preview(
+        &fragments,
+        &extracted.images,
+        &cover,
+        &title,
+        &author,
+        &out_dir,
+    ) {
         Ok(p) => p,
         Err(e) => {
             let _ = tx.send(ProgressMsg::Error(format!("Falha ao gerar o preview: {e}")));
@@ -263,10 +312,10 @@ fn run_pipeline(
 
 fn draw(f: &mut Frame, screen: &Screen) {
     match screen {
-        Screen::Input { path } => draw_input(f, path),
+        Screen::Input { path, .. } => draw_input(f, path),
         Screen::Confirm {
-            title, author, lang, field, ..
-        } => draw_confirm(f, title, author, lang, *field),
+            title, author, lang, cover, field, ..
+        } => draw_confirm(f, title, author, lang, cover, *field),
         Screen::Progress { stage, logs, done, .. } => draw_progress(f, stage, logs, done),
     }
 }
@@ -296,11 +345,12 @@ fn draw_input(f: &mut Frame, path: &str) {
     );
 }
 
-fn draw_confirm(f: &mut Frame, title: &str, author: &str, lang: &str, field: usize) {
+fn draw_confirm(f: &mut Frame, title: &str, author: &str, lang: &str, cover: &str, field: usize) {
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(3),
@@ -321,8 +371,12 @@ fn draw_confirm(f: &mut Frame, title: &str, author: &str, lang: &str, field: usi
     f.render_widget(field_block("Autor", author, field == 1), chunks[1]);
     f.render_widget(field_block("Idioma (ISO, ex: pt, en)", lang, field == 2), chunks[2]);
     f.render_widget(
-        Paragraph::new("Enter inicia a conversão. Esc sai.").wrap(Wrap { trim: true }),
+        field_block("Capa (caminho da imagem; vazio = detectar automaticamente)", cover, field == 3),
         chunks[3],
+    );
+    f.render_widget(
+        Paragraph::new("Enter inicia a conversão. Esc sai.").wrap(Wrap { trim: true }),
+        chunks[4],
     );
 }
 
@@ -357,4 +411,30 @@ fn draw_progress(f: &mut Frame, stage: &str, logs: &VecDeque<String>, done: &Don
         None => "convertendo... [q] sair",
     };
     f.render_widget(Paragraph::new(footer), chunks[2]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_epub_sits_next_to_the_pdf_under_the_same_name() {
+        assert_eq!(epub_filename(Path::new("/livros/Meu Livro.pdf")), "Meu Livro.epub");
+    }
+
+    #[test]
+    fn a_dotted_filename_only_loses_its_last_extension() {
+        assert_eq!(epub_filename(Path::new("vol.2.final.pdf")), "vol.2.final.epub");
+    }
+
+    #[test]
+    fn the_title_falls_back_to_the_filename_without_its_extension() {
+        assert_eq!(filename_title(Path::new("/tmp/Como Mentir.pdf")), "Como Mentir");
+    }
+
+    #[test]
+    fn a_path_with_no_filename_still_yields_usable_names() {
+        assert_eq!(filename_title(Path::new("/")), "Documento");
+        assert_eq!(epub_filename(Path::new("/")), "livro.epub");
+    }
 }

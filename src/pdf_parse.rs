@@ -248,10 +248,12 @@ fn decode_pdf_string(bytes: &[u8]) -> String {
 #[derive(Default)]
 struct FlowRecorder {
     flip_ctm: Transform,
+    page_width: f64,
     lines: Vec<TextRun>,
     cur_text: String,
     cur_y: f64,
     cur_font_size: f64,
+    cur_x_start: f64,
     last_end: f64,
     last_y: f64,
     line_start: bool,
@@ -263,14 +265,17 @@ impl FlowRecorder {
     fn flush_line(&mut self) {
         let text = self.cur_text.trim();
         if !text.is_empty() {
+            let width = if self.page_width > 0.0 { self.page_width } else { 1.0 };
             self.lines.push(TextRun {
                 text: text.to_string(),
                 y: self.cur_y,
                 font_size: if self.cur_font_size > 0.0 { self.cur_font_size } else { 1.0 },
+                x_start: (self.cur_x_start / width).clamp(0.0, 1.0),
             });
         }
         self.cur_text.clear();
         self.cur_font_size = 0.0;
+        self.cur_x_start = f64::MAX;
         self.line_start = true;
     }
 }
@@ -278,6 +283,8 @@ impl FlowRecorder {
 impl OutputDev for FlowRecorder {
     fn begin_page(&mut self, _page_num: u32, media_box: &MediaBox, _art_box: Option<(f64, f64, f64, f64)>) -> Result<(), OutputError> {
         self.flip_ctm = Transform::row_major(1., 0., 0., -1., 0., media_box.ury - media_box.lly);
+        self.page_width = media_box.urx - media_box.llx;
+        self.cur_x_start = f64::MAX;
         self.last_end = 100000.;
         self.last_y = 0.;
         self.line_start = true;
@@ -319,6 +326,7 @@ impl OutputDev for FlowRecorder {
         }
         self.cur_text.push_str(char);
         self.cur_font_size = self.cur_font_size.max(transformed_font_size);
+        self.cur_x_start = self.cur_x_start.min(x);
         self.any_output_yet = true;
         self.last_y = y;
         self.last_end = x + width * transformed_font_size;
@@ -336,5 +344,92 @@ impl OutputDev for FlowRecorder {
 
     fn end_line(&mut self) -> Result<(), OutputError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lopdf::StringFormat;
+
+    fn doc_with_info(entries: &[(&str, Object)]) -> Document {
+        let mut doc = Document::with_version("1.5");
+        let mut info = Dictionary::new();
+        for (key, value) in entries {
+            info.set(*key, value.clone());
+        }
+        let id = doc.add_object(Object::Dictionary(info));
+        doc.trailer.set("Info", Object::Reference(id));
+        doc
+    }
+
+    fn literal(bytes: &[u8]) -> Object {
+        Object::String(bytes.to_vec(), StringFormat::Literal)
+    }
+
+    /// PDF text strings are UTF-16BE when they carry a byte-order mark, and an 8-bit
+    /// encoding otherwise — getting this backwards is what turns "Coração" into mojibake.
+    #[test]
+    fn utf16_strings_are_decoded_through_their_byte_order_mark() {
+        let mut bytes = vec![0xFE, 0xFF];
+        for unit in "Coração".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_be_bytes());
+        }
+        assert_eq!(decode_pdf_string(&bytes), "Coração");
+    }
+
+    #[test]
+    fn strings_without_a_bom_are_read_as_latin1() {
+        assert_eq!(decode_pdf_string(&[0x43, 0x6F, 0x72, 0x61, 0xE7, 0xE3, 0x6F]), "Coração");
+    }
+
+    #[test]
+    fn a_lone_bom_decodes_to_nothing_rather_than_panicking() {
+        assert_eq!(decode_pdf_string(&[0xFE, 0xFF]), "");
+    }
+
+    #[test]
+    fn an_odd_trailing_byte_after_the_bom_is_ignored() {
+        let bytes = vec![0xFE, 0xFF, 0x00, 0x41, 0x00];
+        assert_eq!(decode_pdf_string(&bytes), "A");
+    }
+
+    #[test]
+    fn title_and_author_come_from_the_info_dictionary() {
+        let doc = doc_with_info(&[("Title", literal(b"Meu Livro")), ("Author", literal(b"Fulano"))]);
+        assert_eq!(
+            info_metadata(&doc),
+            (Some("Meu Livro".to_string()), Some("Fulano".to_string()))
+        );
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_trimmed_off_the_metadata() {
+        let doc = doc_with_info(&[("Title", literal(b"  Meu Livro  "))]);
+        assert_eq!(info_metadata(&doc).0, Some("Meu Livro".to_string()));
+    }
+
+    #[test]
+    fn a_blank_title_counts_as_absent_so_the_filename_can_take_over() {
+        let doc = doc_with_info(&[("Title", literal(b"   "))]);
+        assert_eq!(info_metadata(&doc), (None, None));
+    }
+
+    #[test]
+    fn a_non_string_title_is_ignored() {
+        let doc = doc_with_info(&[("Title", Object::Integer(42))]);
+        assert_eq!(info_metadata(&doc).0, None);
+    }
+
+    #[test]
+    fn a_document_with_no_info_dictionary_reports_nothing() {
+        assert_eq!(info_metadata(&Document::with_version("1.5")), (None, None));
+    }
+
+    #[test]
+    fn numbers_are_read_from_either_pdf_representation() {
+        assert_eq!(as_num(&Object::Integer(72)), 72.0);
+        assert_eq!(as_num(&Object::Real(72.5)), 72.5);
+        assert_eq!(as_num(&Object::Null), 0.0, "valor não numérico vira zero");
     }
 }
