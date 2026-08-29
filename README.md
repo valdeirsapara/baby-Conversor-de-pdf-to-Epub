@@ -14,16 +14,20 @@ original, e os capítulos são detectados automaticamente a partir do próprio t
 ### Via Homebrew (macOS e Linux)
 
 ```bash
-brew tap valdeirsapara/tap
+brew tap valdeirsapara/pdf-to-epub
+brew trust valdeirsapara/pdf-to-epub
 brew install pdf_to_epub
 ```
 
-A fórmula também é publicada em um tap dedicado só a este projeto, para quem prefere não
-adicionar o tap geral:
+O `brew trust` é necessário uma única vez: o Homebrew se recusa a carregar fórmulas de
+taps de terceiros (`Refusing to load formula ... from untrusted tap`) até que você declare
+que confia nelas — a fórmula é código Ruby que roda na sua máquina. Para confiar só nesta
+fórmula, em vez do tap inteiro, use
+`brew trust --formula valdeirsapara/pdf-to-epub/pdf_to_epub`.
 
-```bash
-brew install valdeirsapara/pdf-to-epub/pdf_to_epub
-```
+A mesma fórmula também é publicada no tap geral `valdeirsapara/tap`, que agrupa outras
+ferramentas; quem já usa esse tap pode instalar com
+`brew install valdeirsapara/tap/pdf_to_epub`.
 
 ### A partir do código-fonte
 
